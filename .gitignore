@@ -7,3 +7,4 @@ facturas_*.json
 facturas_*.csv
 facturas_*.xlsx
 .DS_Store
+venv/

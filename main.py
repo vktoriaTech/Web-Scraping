@@ -477,7 +477,7 @@ HTML_DEMO = """
 
     <!-- Items -->
     <div class="card" id="card-items" style="display:none">
-      <h3>Productos / Servicios</h3>
+      <h3>Detalle de Productos / Servicios</h3>
       <table class="items-table">
         <thead>
           <tr>
@@ -485,8 +485,11 @@ HTML_DEMO = """
             <th>Código</th>
             <th>Descripción</th>
             <th>U/M</th>
-            <th>Cantidad</th>
+            <th>Cant.</th>
             <th>Precio Unitario</th>
+            <th>Descuento</th>
+            <th>IVA</th>
+            <th>INC %</th>
             <th style="text-align:right">Total</th>
           </tr>
         </thead>
@@ -506,8 +509,24 @@ HTML_DEMO = """
         <span class="amt" id="r-descuento">—</span>
       </div>
       <div class="totales-row">
+        <span class="lbl">Total Bruto</span>
+        <span class="amt" id="r-total-bruto">—</span>
+      </div>
+      <div class="totales-row">
         <span class="lbl">IVA</span>
         <span class="amt" id="r-iva">—</span>
+      </div>
+      <div class="totales-row">
+        <span class="lbl">INC</span>
+        <span class="amt" id="r-inc">—</span>
+      </div>
+      <div class="totales-row">
+        <span class="lbl">Total Impuestos</span>
+        <span class="amt" id="r-total-impuesto">—</span>
+      </div>
+      <div class="totales-row">
+        <span class="lbl">Total Neto</span>
+        <span class="amt" id="r-total-neto">—</span>
       </div>
       <div class="totales-row total-final">
         <span class="lbl">TOTAL FACTURA (COP)</span>
@@ -549,8 +568,8 @@ HTML_DEMO = """
 const CUFE_DEMO = "7d0a7f415b5f452d056991730d8387aa5dbface4397a69b53a26e8330e505ecd40b85fb309d2b71c2c24b859b9e1acb2";
 
 // Auto-fill demo CUFE
-document.getElementById("cufe").value = CUFE_DEMO;
-checkLen();
+
+
 
 function checkLen() {
   const v = document.getElementById("cufe").value.trim();
@@ -651,10 +670,14 @@ function renderResultado(d) {
   }
 
   // Totales
-  fill("r-subtotal",   d.subtotal   || d.total_factura_cop);
-  fill("r-descuento",  d.descuento_detalle || "0,00");
-  fill("r-iva",        d.iva        || "0,00");
-  fill("r-total",      d.total_factura_cop || d.total_neto);
+  fill("r-subtotal",       d.subtotal || "—");
+  fill("r-descuento",      d.descuento_detalle || "0,00");
+  fill("r-total-bruto",    d.total_bruto || "—");
+  fill("r-iva",            d.iva || "0,00");
+  fill("r-inc",            d.inc || "0,00");
+  fill("r-total-impuesto", d.total_impuesto || "—");
+  fill("r-total-neto",     d.total_neto || "—");
+  fill("r-total",          d.total_factura_cop || d.total_neto);
 
   // Autorización
   fill("r-auth-num",   d.autorizacion_numero);
