@@ -3,7 +3,7 @@ Validia — Scraper DIAN v2 DEFINITIVO
 Flujo: CUFE → Playwright + CapSolver (Turnstile x2) → PDF → extracción completa
 """
 
-import time, random, json, re, logging
+import os, time, random, json, re, logging
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
@@ -205,10 +205,12 @@ class ExtractorPDF:
 
 
 class ScraperDIAN:
-    CAPSOLVER_KEY = "CAP-1025A79691AA2EFF2456B25CD6E1D71438DB5D6525ED70700C92CD7DBA7838FF"
+    CAPSOLVER_KEY = os.environ.get("CAPSOLVER_API_KEY", "")
     SITE_KEY      = "0x4AAAAAAAg1WuNb-OnOa76z"
 
     def __init__(self, headless: bool = True, tenant_id: str = "default"):
+        if not self.CAPSOLVER_KEY:
+            log.warning("CAPSOLVER_API_KEY no está configurada — la resolución de Turnstile fallará")
         self.headless  = headless
         self.tenant_id = tenant_id
         self.repo      = RepoPDF()

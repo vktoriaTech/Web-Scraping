@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.git/
+pdfs/
+facturas_*.json
+facturas_*.csv
+facturas_*.xlsx
+.DS_Store

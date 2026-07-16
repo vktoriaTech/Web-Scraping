@@ -1,8 +1,20 @@
-FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
+FROM python:3.12-slim
+
 WORKDIR /app
-RUN apt-get update && apt-get install -y libpoppler-cpp-dev && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpoppler-cpp-dev \
+    wget \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
-RUN playwright install chromium
+
+RUN playwright install --with-deps chromium
+
 COPY . .
+
+EXPOSE 8000
+
 CMD ["python", "main.py"]

@@ -3,18 +3,79 @@ Validia — Demo App
 API + UI para demostración a socios
 """
 
-import json
+import concurrent.futures
+import logging
 import os
-import asyncio
+import secrets
 from dataclasses import asdict
-from pathlib import Path
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from scraper import ScraperDIAN
 
+load_dotenv()
+
+log = logging.getLogger("validia.api")
+
 app = FastAPI(title="Validia CUFE Scraper", version="2.0")
+
+SCRAPE_TIMEOUT_SECONDS = 60
+SCRAPE_MAX_ATTEMPTS = 2  # intento inicial + 1 reintento
+
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="scraper")
+
+
+# ── Auth ────────────────────────────────────────────────────────────────────────
+API_KEY_HEADER = "X-API-Key"
+CUFE_API_KEY = os.environ.get("CUFE_API_KEY", "")
+
+# Rutas que no requieren autenticación: health check, UI de demo y docs de la API.
+PUBLIC_PATHS = {"/health", "/", "/docs", "/redoc", "/openapi.json"}
+
+if not CUFE_API_KEY:
+    log.warning("CUFE_API_KEY no está configurada — todas las rutas protegidas devolverán 401")
+
+
+@app.middleware("http")
+async def api_key_auth(request: Request, call_next):
+    if request.url.path not in PUBLIC_PATHS:
+        provided = request.headers.get(API_KEY_HEADER, "")
+        if not CUFE_API_KEY or not secrets.compare_digest(provided, CUFE_API_KEY):
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": f"API key inválida o no proporcionada. Incluye el header {API_KEY_HEADER}.",
+                    }
+                },
+            )
+    return await call_next(request)
+
+
+# ── Errores estructurados ───────────────────────────────────────────────────────
+class APIError(Exception):
+    def __init__(self, status_code: int, code: str, message: str):
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+
+@app.exception_handler(APIError)
+async def api_error_handler(request: Request, exc: APIError):
+    return JSONResponse(status_code=exc.status_code, content={"error": {"code": exc.code, "message": exc.message}})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    log.exception("Error no manejado")
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": "INTERNAL_ERROR", "message": "Error interno del servidor"}},
+    )
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────────
@@ -23,23 +84,63 @@ class CUFERequest(BaseModel):
     tenant_id: str = "VKTORIAGroup"
 
 
+# ── Scraping con timeout + retry ─────────────────────────────────────────────────
+def _ejecutar_scraper(cufe: str, tenant_id: str):
+    with ScraperDIAN(headless=True, tenant_id=tenant_id) as scraper:
+        return scraper.procesar(cufe)
+
+
+def _procesar_con_reintento(cufe: str, tenant_id: str):
+    ultimo_error = "Error desconocido durante el scraping"
+    ultimo_fue_timeout = False
+
+    for intento in range(1, SCRAPE_MAX_ATTEMPTS + 1):
+        future = _executor.submit(_ejecutar_scraper, cufe, tenant_id)
+        try:
+            factura = future.result(timeout=SCRAPE_TIMEOUT_SECONDS)
+        except concurrent.futures.TimeoutError:
+            ultimo_error = f"El scraping excedió el timeout de {SCRAPE_TIMEOUT_SECONDS} segundos"
+            ultimo_fue_timeout = True
+            log.warning(f"[Intento {intento}/{SCRAPE_MAX_ATTEMPTS}] {ultimo_error}")
+            continue
+        except Exception as e:
+            ultimo_error = str(e)
+            ultimo_fue_timeout = False
+            log.warning(f"[Intento {intento}/{SCRAPE_MAX_ATTEMPTS}] Error inesperado: {ultimo_error}")
+            continue
+
+        if factura.estado_dian == "Error":
+            ultimo_error = factura.detalle_error or ultimo_error
+            ultimo_fue_timeout = False
+            log.warning(f"[Intento {intento}/{SCRAPE_MAX_ATTEMPTS}] {ultimo_error}")
+            continue
+
+        return factura
+
+    if ultimo_fue_timeout:
+        raise APIError(504, "SCRAPE_TIMEOUT", ultimo_error)
+    raise APIError(502, "SCRAPE_FAILED", ultimo_error)
+
+
 # ── Endpoints ───────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "Validia CUFE Scraper v2"}
 
 
-@app.post("/api/validar")
+@app.post("/api/v1/cufe/validar")
 def validar_cufe(req: CUFERequest):
     cufe = req.cufe.strip()
     if len(cufe) != 96:
-        raise HTTPException(400, f"CUFE debe tener 96 caracteres, recibido: {len(cufe)}")
-    try:
-        with ScraperDIAN(headless=True, tenant_id=req.tenant_id) as scraper:
-            factura = scraper.procesar(cufe)
-        return JSONResponse(content=asdict(factura))
-    except Exception as e:
-        raise HTTPException(500, str(e))
+        raise APIError(400, "INVALID_CUFE", f"CUFE debe tener 96 caracteres, recibido: {len(cufe)}")
+    factura = _procesar_con_reintento(cufe, req.tenant_id)
+    return JSONResponse(content=asdict(factura))
+
+
+@app.post("/api/validar", include_in_schema=False)
+def validar_cufe_legacy():
+    """Alias de compatibilidad — redirige a /api/v1/cufe/validar."""
+    return RedirectResponse(url="/api/v1/cufe/validar", status_code=307)
 
 
 # ── UI de demo ───────────────────────────────────────────────────────────────────
@@ -386,6 +487,10 @@ HTML_DEMO = """
         <label>Tenant / Organización</label>
         <input type="text" id="tenant" value="VKTORIAGroup" />
       </div>
+      <div>
+        <label>API Key</label>
+        <input type="text" id="apiKey" placeholder="X-API-Key" />
+      </div>
     </div>
 
     <button id="btnValidar" onclick="validar()" disabled>
@@ -567,6 +672,8 @@ HTML_DEMO = """
 <script>
 const CUFE_DEMO = "7d0a7f415b5f452d056991730d8387aa5dbface4397a69b53a26e8330e505ecd40b85fb309d2b71c2c24b859b9e1acb2";
 
+document.getElementById("apiKey").value = localStorage.getItem("validia_api_key") || "";
+
 // Auto-fill demo CUFE
 
 
@@ -595,22 +702,24 @@ function fill(id, val) {
 async function validar() {
   const cufe   = document.getElementById("cufe").value.trim();
   const tenant = document.getElementById("tenant").value.trim() || "default";
+  const apiKey = document.getElementById("apiKey").value.trim();
+  localStorage.setItem("validia_api_key", apiKey);
 
   document.getElementById("resultado").style.display = "none";
   document.getElementById("btnValidar").disabled = true;
   setEstado("loading", "Consultando portal DIAN y descargando factura... puede tomar ~20 segundos");
 
   try {
-    const resp = await fetch("/api/validar", {
+    const resp = await fetch("/api/v1/cufe/validar", {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
+      headers: {"Content-Type": "application/json", "X-API-Key": apiKey},
       body: JSON.stringify({ cufe, tenant_id: tenant })
     });
 
     const data = await resp.json();
 
     if (!resp.ok) {
-      setEstado("error", "Error: " + (data.detail || "No se pudo procesar"));
+      setEstado("error", "Error: " + (data.error?.message || data.detail || "No se pudo procesar"));
       document.getElementById("btnValidar").disabled = false;
       return;
     }
