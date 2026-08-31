@@ -9,7 +9,7 @@ Extrae datos completos incluyendo detalle de productos directamente del PDF ofic
 - **Playwright** — scraping del portal DIAN (bypasea Cloudflare Turnstile)
 - **CapSolver** — resolución automática del captcha Turnstile
 - **pdfplumber** — extracción estructurada del PDF de la factura
-- **Railway** — hosting en producción
+- **Docker en EC2** — hosting en producción (contenedor `cufe-service`, junto a ValidiaApp)
 
 ## Variables de entorno
 
@@ -183,9 +183,12 @@ docker run --rm -p 8000:8000 --env-file .env validia-cufe-scraper
 
 El contenedor expone el puerto `8000` (configurable con la variable `PORT`).
 
-## Deploy en Railway
+## Deploy en producción (EC2)
 
-1. Conectar el repo `vktoriaTech/Web-Scraping` a Railway
-2. Railway detecta el `Dockerfile` automáticamente
-3. Configurar las variables de entorno `CUFE_API_KEY` y `CAPSOLVER_API_KEY` en el panel de Railway
-4. El servicio queda disponible en la URL generada por Railway
+El servicio corre como contenedor Docker (`cufe-service`) en el mismo EC2 que
+ValidiaApp, en el puerto `8001`. El backend de Validia lo consume internamente
+vía `CUFE_SERVICE_URL=http://cufe-service:8001`.
+
+1. En el EC2, hacer `git pull` de la rama `main` de este repo.
+2. Reconstruir y levantar el contenedor: `docker compose build cufe-service && docker compose up -d cufe-service` (o el `docker build`/`docker run` equivalente).
+3. Las variables `CUFE_API_KEY` y `CAPSOLVER_API_KEY` se pasan por entorno del contenedor.

@@ -104,18 +104,39 @@ class RepoPDF:
 
 
 class ExtractorPDF:
-    def extraer(self, pdf_path: Path) -> dict:
+    def extraer(self, pdf_path: Path, password: str = "") -> dict:
         try:
-            import pdfplumber
-            return self._con_pdfplumber(pdf_path)
+            source = self._desencriptar(pdf_path, password)
+            return self._con_pdfplumber(source)
         except Exception as e:
             log.error(f"Extracción fallida: {e}")
             return {}
 
-    def _con_pdfplumber(self, pdf_path: Path) -> dict:
+    def _desencriptar(self, pdf_path: Path, password: str):
+        """La DIAN entrega el PDF encriptado con el NIT del emisor como
+        contraseña de apertura. Se desencripta con pikepdf a un buffer en
+        memoria que pdfplumber sí puede abrir. Si el PDF no está encriptado,
+        se devuelve la ruta original tal cual."""
+        import io
+        import pikepdf
+        try:
+            with pikepdf.open(str(pdf_path), password=password or "") as pdf:
+                buf = io.BytesIO()
+                pdf.save(buf)
+                buf.seek(0)
+                return buf
+        except pikepdf.PasswordError:
+            # Sin contraseña válida no se puede abrir — se propaga para que
+            # extraer() lo registre como extracción fallida.
+            raise
+        except Exception:
+            # PDF no encriptado u otro caso: usar la ruta directamente.
+            return str(pdf_path)
+
+    def _con_pdfplumber(self, source) -> dict:
         import pdfplumber
         paginas, items = [], []
-        with pdfplumber.open(str(pdf_path)) as pdf:
+        with pdfplumber.open(source) as pdf:
             for i, pagina in enumerate(pdf.pages):
                 texto = pagina.extract_text(layout=True) or ""
                 paginas.append(texto)
@@ -270,8 +291,9 @@ class ScraperDIAN:
             log.error(f"Error Turnstile: {e}")
         return None
 
-    def procesar(self, cufe: str, intento: int = 1) -> FacturaCompleta:
+    def procesar(self, cufe: str, nit_emisor: str = "", intento: int = 1) -> FacturaCompleta:
         cufe = cufe.strip()
+        nit_emisor = (nit_emisor or "").strip()
         log.info(f"[{intento}/{MAX_REINTENTOS}] CUFE: {cufe[:16]}...")
         factura = FacturaCompleta(cufe=cufe, tenant_id=self.tenant_id)
 
@@ -285,6 +307,10 @@ class ScraperDIAN:
                 raise Exception("No se pudo resolver Turnstile de búsqueda")
             self._page.evaluate(f"document.querySelectorAll('input[name=\"cf-turnstile-response\"]').forEach(i => i.value = '{token1}');")
             self._page.wait_for_selector("input#DocumentKey", timeout=10_000).fill(cufe)
+            if nit_emisor:
+                nit_field = self._page.query_selector("input#SearchDocumentNit")
+                if nit_field:
+                    nit_field.fill(nit_emisor)
             time.sleep(0.5)
             self._page.click("button:has-text('Buscar')")
             time.sleep(8)
@@ -320,7 +346,7 @@ class ScraperDIAN:
 
             # Paso 6: Extraer datos del PDF
             log.info("Extrayendo datos del PDF...")
-            datos = self.extractor.extraer(ruta)
+            datos = self.extractor.extraer(ruta, password=nit_emisor)
             self._aplicar_datos_pdf(factura, datos)
             log.info(f"Items extraídos: {len(factura.items)}")
 
@@ -328,7 +354,7 @@ class ScraperDIAN:
             log.error(f"Error: {e}")
             if intento < MAX_REINTENTOS:
                 time.sleep(5 * intento)
-                return self.procesar(cufe, intento + 1)
+                return self.procesar(cufe, nit_emisor, intento + 1)
             factura.estado_dian   = "Error"
             factura.detalle_error = str(e)
 

@@ -10,13 +10,17 @@ import secrets
 from dataclasses import asdict
 
 from dotenv import load_dotenv
+
+# Must run before importing scraper: scraper.py reads CAPSOLVER_API_KEY at
+# class-definition (import) time, so .env has to be loaded first. In the Docker
+# container the vars are real OS env vars, so this only affects local .env runs.
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from scraper import ScraperDIAN
-
-load_dotenv()
 
 log = logging.getLogger("validia.api")
 
@@ -81,21 +85,22 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # ── Schema ──────────────────────────────────────────────────────────────────────
 class CUFERequest(BaseModel):
     cufe: str
+    nit_emisor: str = ""
     tenant_id: str = "VKTORIAGroup"
 
 
 # ── Scraping con timeout + retry ─────────────────────────────────────────────────
-def _ejecutar_scraper(cufe: str, tenant_id: str):
+def _ejecutar_scraper(cufe: str, nit_emisor: str, tenant_id: str):
     with ScraperDIAN(headless=True, tenant_id=tenant_id) as scraper:
-        return scraper.procesar(cufe)
+        return scraper.procesar(cufe, nit_emisor)
 
 
-def _procesar_con_reintento(cufe: str, tenant_id: str):
+def _procesar_con_reintento(cufe: str, nit_emisor: str, tenant_id: str):
     ultimo_error = "Error desconocido durante el scraping"
     ultimo_fue_timeout = False
 
     for intento in range(1, SCRAPE_MAX_ATTEMPTS + 1):
-        future = _executor.submit(_ejecutar_scraper, cufe, tenant_id)
+        future = _executor.submit(_ejecutar_scraper, cufe, nit_emisor, tenant_id)
         try:
             factura = future.result(timeout=SCRAPE_TIMEOUT_SECONDS)
         except concurrent.futures.TimeoutError:
@@ -133,7 +138,10 @@ def validar_cufe(req: CUFERequest):
     cufe = req.cufe.strip()
     if len(cufe) != 96:
         raise APIError(400, "INVALID_CUFE", f"CUFE debe tener 96 caracteres, recibido: {len(cufe)}")
-    factura = _procesar_con_reintento(cufe, req.tenant_id)
+    nit_emisor = req.nit_emisor.strip()
+    if not nit_emisor:
+        raise APIError(400, "INVALID_NIT", "El NIT del emisor es obligatorio (nuevo requisito del portal DIAN)")
+    factura = _procesar_con_reintento(cufe, nit_emisor, req.tenant_id)
     return JSONResponse(content=asdict(factura))
 
 
@@ -482,6 +490,9 @@ HTML_DEMO = """
            oninput="checkLen()" />
     <div class="cufe-len" id="cufeLen">0 / 96 caracteres</div>
 
+    <label>NIT del emisor (sin puntos, comas ni DV)</label>
+    <input type="text" id="nit" placeholder="Ej: 901464397" />
+
     <div class="row">
       <div>
         <label>Tenant / Organización</label>
@@ -701,6 +712,7 @@ function fill(id, val) {
 
 async function validar() {
   const cufe   = document.getElementById("cufe").value.trim();
+  const nit    = document.getElementById("nit").value.trim();
   const tenant = document.getElementById("tenant").value.trim() || "default";
   const apiKey = document.getElementById("apiKey").value.trim();
   localStorage.setItem("validia_api_key", apiKey);
@@ -713,7 +725,7 @@ async function validar() {
     const resp = await fetch("/api/v1/cufe/validar", {
       method: "POST",
       headers: {"Content-Type": "application/json", "X-API-Key": apiKey},
-      body: JSON.stringify({ cufe, tenant_id: tenant })
+      body: JSON.stringify({ cufe, nit_emisor: nit, tenant_id: tenant })
     });
 
     const data = await resp.json();
