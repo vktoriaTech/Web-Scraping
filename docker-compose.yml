@@ -1,0 +1,24 @@
+services:
+
+  cufe-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cufe-service
+    container_name: cufe-service
+    restart: always
+    # CUFE_API_KEY y CAPSOLVER_API_KEY se leen del .env local (no versionado).
+    env_file:
+      - .env
+    ports:
+      - "8001:8001"
+    networks:
+      - validia-net
+
+# Red externa compartida con ValidiaApp: el backend de Veradia resuelve este
+# servicio por su nombre de contenedor (cufe-service:8001). La red la crea el
+# compose de ValidiaApp (proyecto "validiaapp"); aquí solo la referenciamos.
+networks:
+  validia-net:
+    external: true
+    name: validiaapp_validia-net
