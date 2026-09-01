@@ -3,7 +3,7 @@ Validia — Scraper DIAN v2 DEFINITIVO
 Flujo: CUFE → Playwright + CapSolver (Turnstile x2) → PDF → extracción completa
 """
 
-import os, time, random, json, re, logging
+import os, time, random, json, re, logging, base64
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
@@ -79,6 +79,7 @@ class FacturaCompleta:
     fecha_validacion_dian: str = ""
     tenant_id: str = ""
     pdf_path: str = ""
+    pdf_base64: str = ""
     estado_dian: str = ""
     detalle_error: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -317,6 +318,9 @@ class ScraperDIAN:
             folio = factura.numero_factura.replace("FE-", "").replace("FEPM-", "")
             ruta = self.repo.guardar(pdf_bytes, cufe, self.tenant_id, folio, factura.fecha_emision)
             factura.pdf_path = str(ruta)
+            # Se expone el PDF en base64 para que el backend lo persista en S3
+            # (el pdf_path local es efímero dentro del contenedor).
+            factura.pdf_base64 = base64.b64encode(pdf_bytes).decode("ascii")
 
             # Paso 6: Extraer datos del PDF
             log.info("Extrayendo datos del PDF...")
